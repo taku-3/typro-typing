@@ -1,0 +1,1 @@
+select * from public.durations order by sort_order;

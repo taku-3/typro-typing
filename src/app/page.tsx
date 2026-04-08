@@ -25,9 +25,12 @@ export default function Home() {
             モード選択へ
           </Link>
 
-          <button className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 transition">
+          <Link
+            href="/ranking"
+            className="block w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 transition text-center"
+          >
             ランキング
-          </button>
+          </Link>
 
           <button className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 transition">
             チュートリアル
@@ -39,9 +42,21 @@ export default function Home() {
             設定
           </button>
 
-          <button className="underline underline-offset-2 hover:text-slate-200 transition">
-            ログイン / 新規登録
-          </button>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/login"
+              className="underline underline-offset-2 hover:text-slate-200 transition"
+            >
+              ログイン
+            </Link>
+
+            <Link
+              href="/signup"
+              className="underline underline-offset-2 hover:text-slate-200 transition"
+            >
+              新規登録
+            </Link>
+          </div>
         </div>
       </div>
     </main>
