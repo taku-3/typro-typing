@@ -573,14 +573,6 @@ export default function MyPage() {
                 </div>
 
                 <div className="grid gap-4">
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      className="rounded-xl border border-slate-600 bg-slate-900 px-4 py-2 text-sm text-slate-300 opacity-60 cursor-not-allowed"
-                      disabled
-                    >
-                      ユーザー名変更（準備中）
-                    </button>
-                  </div>
 
                   <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-4">
                     <p className="text-xs text-rose-200 mb-2">アカウント削除</p>

@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
 type Body = {
   new_email?: string;
   current_password?: string;
@@ -18,6 +24,7 @@ function json(status: number, data: unknown) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
+      ...corsHeaders,
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
@@ -169,6 +176,10 @@ function validatePassword(password: string) {
 }
 
 serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     if (req.method !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
@@ -249,21 +260,22 @@ serve(async (req) => {
       return json(404, { ok: false, error: "Credential not found" });
     }
 
-    const passwordOk = await verifyPasswordPbkdf2(currentPassword, cred.password_hash);
+    const passwordOk = await verifyPasswordPbkdf2(
+      currentPassword,
+      cred.password_hash,
+    );
     if (!passwordOk) {
       return json(401, { ok: false, error: "Current password is incorrect" });
     }
 
     // 初回メール登録（primary メール未登録）
     if (isFirstEmail) {
-      const { error: insertErr } = await admin
-        .from("emails")
-        .insert({
-          player_id: playerId,
-          email: newEmail,
-          is_primary: true,
-          verified_at: null,
-        });
+      const { error: insertErr } = await admin.from("emails").insert({
+        player_id: playerId,
+        email: newEmail,
+        is_primary: true,
+        verified_at: null,
+      });
 
       if (insertErr) {
         console.error("emails first insert error:", insertErr);
