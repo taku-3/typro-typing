@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
 type Body = {
   username: string;
   password: string;
@@ -10,6 +15,7 @@ function json(status: number, data: unknown) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
+      ...corsHeaders,
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
@@ -139,6 +145,11 @@ async function signJwtHS256(payload: Record<string, unknown>, secret: string) {
 }
 
 serve(async (req: Request) => {
+
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     if (req.method !== "POST")
       return json(405, { ok: false, error: "Method Not Allowed" });

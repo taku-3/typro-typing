@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
 type Body = {
   username: string;
   password: string;
@@ -16,6 +22,7 @@ function json(status: number, data: unknown) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
+      ...corsHeaders,
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
@@ -111,6 +118,10 @@ async function hashPasswordPbkdf2(plain: string) {
 serve(async (req: Request) => {
   console.log("auth-signup invoked");
 
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     if (req.method !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
@@ -189,6 +200,7 @@ serve(async (req: Request) => {
     const { data: player, error: playerErr } = await admin
       .from("players")
       .insert({
+        kind: "registered",
         display_name: displayName,
         icon_url: body.iconUrl ?? null,
       })
@@ -197,7 +209,11 @@ serve(async (req: Request) => {
 
     if (playerErr) {
       console.error("players insert error:", playerErr);
-      return json(500, { ok: false, error: "Failed to create user." });
+      return json(500, {
+        ok: false,
+        error: `players_insert_failed: ${playerErr.message}`,
+        detail: playerErr,
+      });
     }
 
     if (!player) {
@@ -225,14 +241,25 @@ serve(async (req: Request) => {
         return json(409, { ok: false, error: "username_already_taken" });
       }
 
-      return json(500, { ok: false, error: "Failed to set credentials." });
+      return json(500, {
+        ok: false,
+        error: `credentials_insert_failed: ${credErr.message}`,
+        detail: credErr,
+      });
     }
 
     // 4) consents 作成
+    const nowIso = new Date().toISOString();
+
     const { error: consentErr } = await admin.from("consents").insert({
       player_id: player.id,
+      terms_version: 1,
+      privacy_version: 1,
+      terms_accepted_at: nowIso,
+      privacy_accepted_at: nowIso,
       parental_consent: parentalConsent,
-      consented_at: new Date().toISOString(),
+      parental_consent_at: parentalConsent ? nowIso : null,
+      updated_at: nowIso,
     });
 
     if (consentErr) {
@@ -241,7 +268,11 @@ serve(async (req: Request) => {
       await admin.from("credentials").delete().eq("player_id", player.id);
       await admin.from("players").delete().eq("id", player.id);
 
-      return json(500, { ok: false, error: "Failed to save consent." });
+      return json(500, {
+        ok: false,
+        error: `consents_insert_failed: ${consentErr.message}`,
+        detail: consentErr,
+      });
     }
 
     // 5) email があれば emails に保存
@@ -250,6 +281,7 @@ serve(async (req: Request) => {
         player_id: player.id,
         email,
         is_primary: true,
+        created_at: nowIso,
       });
 
       if (emailErr) {
@@ -259,7 +291,11 @@ serve(async (req: Request) => {
         await admin.from("credentials").delete().eq("player_id", player.id);
         await admin.from("players").delete().eq("id", player.id);
 
-        return json(500, { ok: false, error: "Failed to save email." });
+        return json(500, {
+          ok: false,
+          error: `emails_insert_failed: ${emailErr.message}`,
+          detail: emailErr,
+        });
       }
     }
 
