@@ -1,0 +1,1 @@
+SELECT * FROM leaderboard_public_view

@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   useEffect,
   useMemo,
@@ -47,6 +48,8 @@ import { resetAllTyproStorage } from "@/features/typro/storageReset";
 import { PlayScreen } from "@/features/typro/play/PlayScreen";
 import { ResultModal } from "@/features/typro/play/ResultModal";
 import { useGameSound } from "@/features/typro/sound/useGameSound";
+import { submitWordScore } from "@/lib/api/ranking";
+import { AUTH_CHANGED_EVENT, isLoggedIn } from "@/lib/auth-storage";
 
 const TIME_OPTIONS = [30, 60, 90] as const;
 
@@ -129,6 +132,8 @@ export default function WordModePage() {
     () => Object.keys(WORD_THEMES) as WordThemeKey[],
     [],
   );
+  const router = useRouter();
+
   const [isHydrated, setIsHydrated] = useState(false);
 
   // 🔊 サウンド設定（localStorage）
@@ -217,6 +222,14 @@ export default function WordModePage() {
 
   // ✅ ResultModal の開閉（終了後に自動表示）
   const [showResult, setShowResult] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [submitMessage, setSubmitMessage] = useState<{
+    type: "success" | "review" | "error" | null;
+    text: string;
+  }>({
+    type: null,
+    text: "",
+  });
   useEffect(() => {
     if (hasFinished) setShowResult(true);
   }, [hasFinished]);
@@ -278,6 +291,24 @@ export default function WordModePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themeKeys]);
 
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    const syncLoggedIn = () => {
+      setLoggedIn(isLoggedIn());
+    };
+
+    syncLoggedIn();
+
+    window.addEventListener(AUTH_CHANGED_EVENT, syncLoggedIn);
+    window.addEventListener("storage", syncLoggedIn);
+
+    return () => {
+      window.removeEventListener(AUTH_CHANGED_EVENT, syncLoggedIn);
+      window.removeEventListener("storage", syncLoggedIn);
+    };
+  }, [isHydrated]);
+
   const prepareNextWord = () => {
     // 1) 弱点モード優先
     if (weakWordsPool && weakWordsPool.length > 0) {
@@ -326,9 +357,15 @@ export default function WordModePage() {
 
   // ✅ 「結果モーダルが表示されたら +1」用（重複加算防止）
   const countedPlayRef = useRef(false);
+  const lastSubmittedScoreKeyRef = useRef<string | null>(null);
   const [pendingResult, setPendingResult] = useState<ResultSummary | null>(
     null,
   );
+
+  function getAuthToken(): string | null {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("typro-auth-token");
+  }
 
   // start
   const handleStart = () => {
@@ -344,6 +381,7 @@ export default function WordModePage() {
     // ✅ playカウント関連リセット
     countedPlayRef.current = false;
     setPendingResult(null);
+    lastSubmittedScoreKeyRef.current = null;
 
     setCompletedChars(0);
     setCompletedWords(0);
@@ -354,6 +392,7 @@ export default function WordModePage() {
     setTyproScore(0);
     setSessionBadge(null);
     setGrowth(null);
+    setSubmitMessage({ type: null, text: "" });
 
     setInput("");
     prevInputRef.current = "";
@@ -569,6 +608,7 @@ export default function WordModePage() {
     // ✅ playカウント関連リセット（弱点練習は前回比混乱しやすい）
     countedPlayRef.current = false;
     setPendingResult(null);
+    lastSubmittedScoreKeyRef.current = null;
 
     setInput("");
     prevInputRef.current = "";
@@ -647,6 +687,75 @@ export default function WordModePage() {
 
     countedPlayRef.current = true;
 
+    const token = getAuthToken();
+
+    // ✅ 同じ結果を二重送信しないためのキー
+    const submitKey = [
+      token ?? "guest",
+      selectedTheme,
+      selectedLevel,
+      caseApplicable ? selectedCase : "lower",
+      selectedSeconds,
+      pendingResult.score,
+      pendingResult.accuracy,
+      pendingResult.speed,
+      pendingResult.completedChars,
+      pendingResult.mistypedCount,
+      pendingResult.completedWords,
+    ].join("|");
+
+    if (lastSubmittedScoreKeyRef.current === submitKey) {
+      console.warn("[word] score-submit skipped (duplicate):", submitKey);
+    } else if (token) {
+      lastSubmittedScoreKeyRef.current = submitKey;
+
+      void submitWordScore(token, {
+        theme_id: selectedTheme,
+        level: selectedLevel,
+        case_mode: caseApplicable ? selectedCase : "lower",
+        duration_sec: selectedSeconds,
+        score: pendingResult.score,
+        accuracy: pendingResult.accuracy,
+        speed_cps: pendingResult.speed,
+        typed_chars: pendingResult.completedChars,
+        mistyped_count: pendingResult.mistypedCount,
+      }).then((res) => {
+        if (!res.ok) {
+          if (res.error === "parental_consent_required") {
+            setSubmitMessage({
+              type: "review",
+              text: "未成年アカウントは保護者同意後にランキング保存できます。",
+            });
+            return;
+          }
+
+          console.error("[word] score-submit failed:", res.error);
+          setSubmitMessage({
+            type: "error",
+            text: "ランキング保存に失敗しました。",
+          });
+          return;
+        }
+
+        if (res.rank_status === "needs_review") {
+          console.warn("[word] score marked as needs_review");
+          setSubmitMessage({
+            type: "review",
+            text: "記録は送信されました。確認後に反映される場合があります。",
+          });
+          return;
+        }
+
+        setSubmitMessage({
+          type: "success",
+          text: "ランキングに記録されました！",
+        });
+      });
+    } else {
+      console.warn("[word] auth token not found, skip score-submit");
+      setSubmitMessage({ type: null, text: "" });
+    }
+
     const prevStats = statsRef.current;
     const today = todayISO();
     const isSameDay = prevStats.lastPlayedDate === today;
@@ -669,7 +778,7 @@ export default function WordModePage() {
 
     const nextStats: WordStatsSummary = {
       ...prevStats,
-      totalPlays: prevStats.totalPlays + 1, // ✅ ここで +1
+      totalPlays: prevStats.totalPlays + 1,
       totalChars: prevStats.totalChars + pendingResult.completedChars,
       totalMistypes: prevStats.totalMistypes + pendingResult.mistypedCount,
       bestScore: Math.max(prevStats.bestScore, pendingResult.score),
@@ -688,7 +797,6 @@ export default function WordModePage() {
     });
     setSessionBadge(badge);
 
-    // 前回比（theme+level+case）
     const themeForThisPlay = playThemeRef.current;
     const resultId = buildResultId(
       themeForThisPlay,
@@ -713,7 +821,16 @@ export default function WordModePage() {
 
     saveWordLastResult(resultId, pendingResult);
     setPreviousResult(pendingResult);
-  }, [showResult, pendingResult, isHydrated, selectedLevel, selectedCase]);
+  }, [
+    showResult,
+    pendingResult,
+    isHydrated,
+    selectedTheme,
+    selectedLevel,
+    selectedCase,
+    selectedSeconds,
+    caseApplicable,
+  ]);
 
   const careerRankForTheme: BadgeRank =
     stats.careerRankByTheme[selectedTheme] ?? "GREEN";
@@ -733,8 +850,32 @@ export default function WordModePage() {
     if (!next) stopBgm();
   };
 
+  const handleGoToLoginWithRedirect = () => {
+    const qs = new URLSearchParams({
+      redirect: window.location.pathname + window.location.search,
+    });
+
+    router.push(`/login?${qs.toString()}`);
+  };
+
+  const handleGoToCurrentRanking = () => {
+    const qs = new URLSearchParams({
+      period_type: "weekly",
+      theme_id: selectedTheme,
+      level: selectedLevel,
+      case_mode: caseApplicable ? selectedCase : "lower",
+      duration_sec: String(selectedSeconds),
+    });
+
+    router.push(`/ranking?${qs.toString()}`);
+  };
+
   // ✅ 両モード共通リセット（typro- を全削除、音だけ残す）
   const handleResetAll = () => {
+    const confirmMessage = loggedIn
+      ? "このPCに保存されている練習記録・前回比・弱点練習データをリセットします。\nアカウントに保存されたランキング記録は消えません。"
+      : "このPCに保存されている練習記録・前回比・弱点練習データをリセットします。よろしいですか？";
+    if (!window.confirm(confirmMessage)) return;
     resetAllTyproStorage();
 
     const resetStats: WordStatsSummary = {
@@ -758,6 +899,7 @@ export default function WordModePage() {
 
     countedPlayRef.current = false;
     setPendingResult(null);
+    lastSubmittedScoreKeyRef.current = null;
 
     setCompletedChars(0);
     setCompletedWords(0);
@@ -883,6 +1025,7 @@ export default function WordModePage() {
 
                       countedPlayRef.current = false;
                       setPendingResult(null);
+                      lastSubmittedScoreKeyRef.current = null;
                     }}
                     disabled={isPlaying || isCountdowning}
                     className="w-full rounded-xl bg-slate-900 border border-slate-600 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60"
@@ -915,6 +1058,7 @@ export default function WordModePage() {
 
                           countedPlayRef.current = false;
                           setPendingResult(null);
+                          lastSubmittedScoreKeyRef.current = null;
 
                           prepareNextWord();
                         }}
@@ -947,6 +1091,7 @@ export default function WordModePage() {
 
                           countedPlayRef.current = false;
                           setPendingResult(null);
+                          lastSubmittedScoreKeyRef.current = null;
 
                           if (isHydrated) {
                             const id = buildResultId(
@@ -1013,6 +1158,7 @@ export default function WordModePage() {
 
                             countedPlayRef.current = false;
                             setPendingResult(null);
+                            lastSubmittedScoreKeyRef.current = null;
 
                             if (isHydrated) {
                               const id = buildResultId(
@@ -1114,17 +1260,28 @@ export default function WordModePage() {
               </div>
 
               {/* ✅ 両モード共通リセット */}
-              <div className="mt-4 flex items-center justify-between">
+              <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <button
                   onClick={handleResetAll}
                   className="text-xs text-slate-300 underline underline-offset-2 hover:text-white"
                   disabled={isPlaying || isCountdowning}
                 >
-                  このPCの記録をリセット
+                  このPCの練習記録をリセット
                 </button>
-                <p className="text-xs text-slate-500">
-                  ※練習モード/単語モード両方の記録が消えます
-                </p>
+
+                <div className="text-xs text-slate-500 space-y-1">
+                  <p>
+                    ※練習モード / 単語モードのローカル記録がリセットされます
+                  </p>
+
+                  {loggedIn ? (
+                    <p className="text-emerald-300">
+                      ※アカウントに保存されたランキング記録やスコア履歴は消えません
+                    </p>
+                  ) : (
+                    <p>※未ログイン時は、このPC内の記録のみが保存対象です</p>
+                  )}
+                </div>
               </div>
             </section>
           </>
@@ -1186,13 +1343,21 @@ export default function WordModePage() {
           <div className="mb-8 rounded-2xl border border-slate-700 bg-slate-800 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-slate-300">結果まとめを閉じました。</p>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={() => setShowResult(true)}
                   className="px-4 py-2 rounded-xl border border-slate-600 bg-slate-900 hover:bg-slate-700 text-sm font-semibold transition"
                 >
                   結果を見る
                 </button>
+
+                <button
+                  onClick={handleGoToCurrentRanking}
+                  className="px-4 py-2 rounded-xl border border-slate-600 bg-slate-900 hover:bg-slate-700 text-sm font-semibold transition"
+                >
+                  この条件のランキングを見る
+                </button>
+
                 <button
                   onClick={handleStart}
                   className="px-4 py-2 rounded-xl bg-sky-400 hover:bg-sky-300 text-slate-900 text-sm font-semibold transition"
@@ -1201,6 +1366,52 @@ export default function WordModePage() {
                 </button>
               </div>
             </div>
+
+            {loggedIn && submitMessage.type ? (
+              <div
+                className={[
+                  "mt-4 rounded-xl px-4 py-3 border",
+                  submitMessage.type === "success"
+                    ? "border-emerald-400/40 bg-emerald-500/10"
+                    : submitMessage.type === "review"
+                      ? "border-amber-400/40 bg-amber-500/10"
+                      : "border-rose-400/40 bg-rose-500/10",
+                ].join(" ")}
+              >
+                <p
+                  className={[
+                    "text-sm font-semibold",
+                    submitMessage.type === "success"
+                      ? "text-emerald-200"
+                      : submitMessage.type === "review"
+                        ? "text-amber-200"
+                        : "text-rose-200",
+                  ].join(" ")}
+                >
+                  {submitMessage.text}
+                </p>
+              </div>
+            ) : null}
+
+            {!loggedIn ? (
+              <div className="mt-4 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3">
+                <p className="text-sm font-semibold text-amber-200">
+                  ログインするとランキングに記録できます！
+                </p>
+                <p className="mt-1 text-xs text-slate-300">
+                  今回のプレイ自体はできますが、ランキング保存にはログインが必要です。
+                </p>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={handleGoToLoginWithRedirect}
+                    className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-900 text-sm font-semibold transition"
+                  >
+                    ログインしてランキングに参加
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
