@@ -123,3 +123,38 @@ export async function deleteAccount(
 
   return data ?? { ok: false, error: "invalid_response" };
 }
+
+
+export type SendVerifyEmailResponse = {
+  ok: boolean;
+  already_verified?: boolean;
+  message?: string;
+  error?: string;
+};
+
+export async function sendVerifyEmail(
+  token: string,
+): Promise<SendVerifyEmailResponse> {
+  const res = await fetch(`${FUNCTIONS_BASE}/auth-email-verify-request`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({}),
+    cache: "no-store",
+  });
+
+  const data = (await res.json().catch(() => null)) as
+    | SendVerifyEmailResponse
+    | null;
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: data?.error ?? `auth-email-verify-request failed (${res.status})`,
+    };
+  }
+
+  return data ?? { ok: false, error: "invalid_response" };
+}

@@ -154,3 +154,57 @@ export async function hashPasswordPbkdf2(plain: string): Promise<string> {
 
   return `pbkdf2_sha256$${iterations}$${saltB64}$${hashB64}`;
 }
+
+function fromB64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes;
+}
+
+export async function verifyPasswordPbkdf2(
+  plain: string,
+  storedHash: string,
+): Promise<boolean> {
+  const parts = storedHash.split("$");
+
+  if (parts.length !== 4) {
+    throw new Error("Invalid password hash format.");
+  }
+
+  const [algorithm, iterationsText, saltB64, hashB64] = parts;
+
+  if (algorithm !== "pbkdf2_sha256") {
+    throw new Error("Unsupported password hash algorithm.");
+  }
+
+  const iterations = Number(iterationsText);
+  if (!Number.isFinite(iterations) || iterations <= 0) {
+    throw new Error("Invalid PBKDF2 iteration count.");
+  }
+
+  const salt = fromB64(saltB64);
+
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(plain),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"],
+  );
+
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
+    keyMaterial,
+    256,
+  );
+
+  const actualHashB64 = b64(bits);
+
+  return actualHashB64 === hashB64;
+}

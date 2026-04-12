@@ -33,8 +33,18 @@ export default function ForgotPasswordPage() {
 
       setSubmitted(true);
     } catch (error) {
-      console.error(error);
-      setErrorMessage("送信に失敗しました。時間をおいて再度お試しください。");
+      const message =
+        error instanceof Error ? error.message : "request_failed";
+
+      if (message === "functions_base_url_missing") {
+        setErrorMessage(
+          "環境設定が不足しています。管理者にお問い合わせください。",
+        );
+      } else {
+        setErrorMessage(
+          "送信に失敗しました。時間をおいて再度お試しください。",
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -43,7 +53,9 @@ export default function ForgotPasswordPage() {
   return (
     <main className="mx-auto flex min-h-[calc(100vh-80px)] w-full max-w-md flex-col justify-center px-4 py-10">
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-2xl font-bold text-slate-900">パスワード再設定</h1>
+        <h1 className="text-2xl font-bold text-slate-900">
+          パスワード再設定
+        </h1>
         <p className="mt-2 text-sm leading-6 text-slate-600">
           登録したユーザー名とメールアドレスを入力してください。
           一致する場合、パスワード再設定用メールを送信します。
@@ -72,6 +84,7 @@ export default function ForgotPasswordPage() {
                 placeholder="TakumiTest"
                 autoComplete="username"
                 required
+                disabled={submitting}
               />
               <p className="mt-1 text-xs text-slate-500">
                 登録時と同じ大文字・小文字で入力してください。
@@ -94,6 +107,7 @@ export default function ForgotPasswordPage() {
                 placeholder="example@example.com"
                 autoComplete="email"
                 required
+                disabled={submitting}
               />
             </div>
 
@@ -105,7 +119,7 @@ export default function ForgotPasswordPage() {
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !username.trim() || !email.trim()}
               className="w-full rounded-xl bg-sky-500 px-4 py-3 font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? "送信中..." : "再設定メールを送る"}

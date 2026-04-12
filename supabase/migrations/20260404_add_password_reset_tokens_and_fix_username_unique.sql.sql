@@ -25,8 +25,7 @@ create table if not exists public.password_reset_tokens (
 
   -- 監査・将来のレート制限/調査用（任意だが入れておく）
   requested_ip inet null,
-  used_ip inet null,
-  user_agent text null
+  used_ip inet null
 );
 
 -- =========================================================

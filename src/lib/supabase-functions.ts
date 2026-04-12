@@ -1,22 +1,30 @@
-const DEFAULT_FUNCTIONS_BASE_URL = "http://127.0.0.1:54321/functions/v1";
+// src/lib/supabase-functions.ts
+const FUNCTIONS_BASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_FUNCTIONS_BASE_URL ??
+  "";
 
-function getFunctionsBaseUrl() {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_SUPABASE_FUNCTIONS_BASE_URL ??
-    DEFAULT_FUNCTIONS_BASE_URL;
+function buildErrorMessage(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "error" in error &&
+    typeof (error as { error?: unknown }).error === "string"
+  ) {
+    return (error as { error: string }).error;
+  }
 
-  return baseUrl.replace(/\/+$/, "");
-}
-
-export function buildFunctionUrl(functionName: string) {
-  return `${getFunctionsBaseUrl()}/${functionName}`;
+  return "request_failed";
 }
 
 export async function postPublicFunction<TResponse>(
   functionName: string,
-  body: unknown,
+  body: Record<string, unknown>,
 ): Promise<TResponse> {
-  const response = await fetch(buildFunctionUrl(functionName), {
+  if (!FUNCTIONS_BASE_URL) {
+    throw new Error("functions_base_url_missing");
+  }
+
+  const res = await fetch(`${FUNCTIONS_BASE_URL}/${functionName}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -25,13 +33,10 @@ export async function postPublicFunction<TResponse>(
     cache: "no-store",
   });
 
-  const data = await response.json().catch(() => null);
+  const data = await res.json().catch(() => null);
 
-  if (!response.ok) {
-    const message =
-      (data && typeof data === "object" && "error" in data && data.error) ||
-      `Request failed with status ${response.status}`;
-    throw new Error(String(message));
+  if (!res.ok) {
+    throw new Error(buildErrorMessage(data));
   }
 
   return data as TResponse;
