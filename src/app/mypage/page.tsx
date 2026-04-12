@@ -27,6 +27,7 @@ import {
   changePrimaryEmail,
   changePassword,
   deleteAccount,
+  sendVerifyEmail,
 } from "@/lib/api/account";
 
 export default function MyPage() {
@@ -43,6 +44,9 @@ export default function MyPage() {
   const [savingEmail, setSavingEmail] = useState(false);
   const [emailSaveMessage, setEmailSaveMessage] = useState("");
   const [emailSaveError, setEmailSaveError] = useState("");
+  const [sendingVerifyEmail, setSendingVerifyEmail] = useState(false);
+  const [verifyEmailMessage, setVerifyEmailMessage] = useState("");
+  const [verifyEmailError, setVerifyEmailError] = useState("");
   const [passwordCurrentInput, setPasswordCurrentInput] = useState("");
   const [passwordNewInput, setPasswordNewInput] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
@@ -195,9 +199,66 @@ export default function MyPage() {
     setCurrentPasswordInput("");
     setEmailSaveMessage(
       res.is_new
-        ? "メールアドレスを登録しました。"
-        : "メールアドレスを変更しました。",
+        ? "メールアドレスを登録しました。認証メールを送信して認証を完了してください。"
+        : "メールアドレスを変更しました。新しいメールアドレスで再認証してください。",
     );
+  };
+
+  const handleSendVerifyEmail = async () => {
+    const token = getAuthToken();
+    if (!token || !profile) {
+      setVerifyEmailError("ログイン情報を確認できませんでした。");
+      return;
+    }
+
+    if (!profile.email) {
+      setVerifyEmailError("メールアドレスが登録されていません。");
+      return;
+    }
+
+    if (profile.email_verified) {
+      setVerifyEmailMessage("このメールアドレスはすでに認証済みです。");
+      setVerifyEmailError("");
+      return;
+    }
+
+    setSendingVerifyEmail(true);
+    setVerifyEmailError("");
+    setVerifyEmailMessage("");
+
+    const res = await sendVerifyEmail(token);
+
+    setSendingVerifyEmail(false);
+
+    if (!res.ok) {
+      switch (res.error) {
+        case "missing_authorization":
+        case "invalid_token":
+          setVerifyEmailError(
+            "ログイン状態が切れています。再ログインしてください。",
+          );
+          return;
+        case "primary_email_not_found":
+          setVerifyEmailError("認証対象のメールアドレスが見つかりません。");
+          return;
+        default:
+          setVerifyEmailError(res.error ?? "認証メールの送信に失敗しました。");
+          return;
+      }
+    }
+
+    if (res.already_verified) {
+      setVerifyEmailMessage("このメールアドレスはすでに認証済みです。");
+      setVerifyEmailError("");
+      setProfile({
+        ...profile,
+        email_verified: true,
+      });
+      return;
+    }
+
+    setVerifyEmailMessage("認証メールを送信しました。受信箱をご確認ください。");
+    setVerifyEmailError("");
   };
 
   const handleChangePassword = async () => {
@@ -437,6 +498,37 @@ export default function MyPage() {
                     ) : null}
                   </div>
 
+                  {profile?.email && !profile.email_verified ? (
+                    <div className="mb-4 flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={handleSendVerifyEmail}
+                        disabled={sendingVerifyEmail}
+                        className="rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-amber-300 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {sendingVerifyEmail
+                          ? "送信中..."
+                          : "認証メールを再送する"}
+                      </button>
+                      {profile?.email && !profile.email_verified ? (
+                        <p className="mt-2 text-xs text-amber-200">
+                          メールアドレスを変更した場合は、再度メール認証が必要です。
+                        </p>
+                      ) : null}
+
+                      {verifyEmailMessage ? (
+                        <span className="text-xs text-emerald-300">
+                          {verifyEmailMessage}
+                        </span>
+                      ) : null}
+
+                      {verifyEmailError ? (
+                        <span className="text-xs text-rose-300">
+                          {verifyEmailError}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="flex flex-col gap-2">
                       <label className="text-xs text-slate-400">
@@ -573,7 +665,6 @@ export default function MyPage() {
                 </div>
 
                 <div className="grid gap-4">
-
                   <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-4">
                     <p className="text-xs text-rose-200 mb-2">アカウント削除</p>
 
