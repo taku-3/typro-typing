@@ -1,8 +1,9 @@
-# Supabase
-.branches
-.temp
-
-# dotenvx
-.env.keys
+# env
+.env
 .env.local
 .env.*.local
+.env.keys
+
+# supabase
+supabase/.env
+supabase/snippets/
