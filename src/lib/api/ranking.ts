@@ -58,7 +58,7 @@ export async function submitWordScore(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
-    },supabase link --project-ref xlljfjzzwdcioqlifvpo
+    },
     body: JSON.stringify(payload),
     cache: "no-store",
   });

@@ -443,3 +443,13 @@ entrypoint = "./functions/score-submit/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/leaderboard-get/index.ts"
+
+[functions.auth-email-verify-request]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/auth-email-verify-request/index.ts"
+
+[functions.auth-email-verify-confirm]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/auth-email-verify-confirm/index.ts"
