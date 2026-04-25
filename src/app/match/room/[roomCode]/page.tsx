@@ -1,13 +1,32 @@
-
 "use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { caseLabel, levelLabel, WORD_THEMES, type WordThemeKey } from "@/features/typro/word/words";
-import { getAuthToken } from "@/lib/auth-storage";
+import { getAuthToken, getStoredPlayer } from "@/lib/auth-storage";
 import { getMatchRoom } from "@/lib/api/match";
+import type { MatchRealtimeConnectionStatus, MatchRealtimeMemberState } from "@/features/typro/match/realtime/types";
 import type { MatchRoomDetail } from "@/features/typro/match/types";
+import { useMatchRoomRealtime } from "@/features/typro/match/realtime/useMatchRoomRealtime";
+
+function connectionStatusLabel(status: MatchRealtimeConnectionStatus): string {
+  if (status === "connected") return "接続中";
+  if (status === "disconnected") return "切断";
+  return "未接続";
+}
+
+function memberConnectionLabel(member: MatchRealtimeMemberState): string {
+  if (!member.hasJoinedRealtime) {
+    return "未接続（未参加）";
+  }
+
+  return connectionStatusLabel(member.connectionStatus);
+}
+
+function readyLabel(ready: boolean): string {
+  return ready ? "READY" : "未準備";
+}
 
 export default function MatchRoomPage() {
   const params = useParams<{ roomCode: string }>();
@@ -17,6 +36,27 @@ export default function MatchRoomPage() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const [detail, setDetail] = useState<MatchRoomDetail | null>(null);
+
+  const authToken = useMemo(() => getAuthToken(), []);
+  const storedPlayer = useMemo(() => getStoredPlayer(), []);
+
+  const myPlayerId = useMemo(() => {
+    if (!detail) return storedPlayer?.id ?? "";
+    if (detail.viewerRole === "host" || detail.viewerRole === "guest") {
+      const selfFromRoom = detail.room.players.find((player) => player.role === detail.viewerRole);
+      if (selfFromRoom?.playerId) {
+        return selfFromRoom.playerId;
+      }
+    }
+
+    return storedPlayer?.id ?? "";
+  }, [detail, storedPlayer?.id]);
+
+  const { state: realtimeState, toggleReady, canSubscribe } = useMatchRoomRealtime({
+    authToken,
+    detail,
+    myPlayerId,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +115,7 @@ export default function MatchRoomPage() {
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold">対戦ルーム</h1>
-            <p className="text-sm text-slate-300 mt-1">PR1: 参加情報表示のみ（Realtime未対応）</p>
+            <p className="text-sm text-slate-300 mt-1">Phase2-A: Realtime READY / 接続状態同期</p>
           </div>
           <Link
             href="/match"
@@ -86,9 +126,7 @@ export default function MatchRoomPage() {
         </header>
 
         {isValidRoomCode && loading ? <p className="text-sm text-slate-300">読み込み中...</p> : null}
-        {!isValidRoomCode ? (
-          <p className="text-sm text-rose-300">roomCode が不正です。</p>
-        ) : null}
+        {!isValidRoomCode ? <p className="text-sm text-rose-300">roomCode が不正です。</p> : null}
         {!loading && errorText ? <p className="text-sm text-rose-300">{errorText}</p> : null}
 
         {isValidRoomCode && !loading && !errorText && detail ? (
@@ -124,15 +162,64 @@ export default function MatchRoomPage() {
                 <span className="text-slate-400">host:</span> {host?.displayName || host?.playerId || "-"}
               </p>
               <p>
-                <span className="text-slate-400">guest:</span>{" "}
-                {guest?.displayName || guest?.playerId || "参加待ち"}
+                <span className="text-slate-400">guest:</span> {guest?.displayName || guest?.playerId || "参加待ち"}
               </p>
             </div>
+
+            <div className="rounded-xl border border-slate-700 bg-slate-900 p-4 space-y-3 text-sm">
+              <p>
+                <span className="text-slate-400">自分のrole:</span> {realtimeState.myRole ?? detail.viewerRole}
+              </p>
+              <p>
+                <span className="text-slate-400">host 接続状態:</span>{" "}
+                {memberConnectionLabel(realtimeState.host)}
+              </p>
+              <p>
+                <span className="text-slate-400">host READY:</span> {readyLabel(realtimeState.host.ready)}
+              </p>
+              <p>
+                <span className="text-slate-400">guest 接続状態:</span>{" "}
+                {memberConnectionLabel(realtimeState.guest)}
+              </p>
+              <p>
+                <span className="text-slate-400">guest READY:</span> {readyLabel(realtimeState.guest.ready)}
+              </p>
+              {realtimeState.errorMessage ? (
+                <p className="text-rose-300">Realtime: {realtimeState.errorMessage}</p>
+              ) : null}
+              {!canSubscribe ? (
+                <p className="text-amber-300">outsider のためRealtime購読は行いません。</p>
+              ) : (
+                <p>
+                  <span className="text-slate-400">channel:</span> {realtimeState.channelStatus}
+                </p>
+              )}
+            </div>
+
+            {(detail.viewerRole === "host" || detail.viewerRole === "guest") && canSubscribe ? (
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={toggleReady}
+                  className="rounded-lg px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
+                >
+                  {realtimeState.selfReady ? "Ready解除" : "Readyにする"}
+                </button>
+                {detail.viewerRole === "host" ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="rounded-lg px-4 py-2 bg-slate-700 text-slate-300 text-sm cursor-not-allowed"
+                  >
+                    対戦開始（次PRで有効化）
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="text-sm text-slate-300 space-y-1">
               <p>canJoin: {detail.canJoin ? "true" : "false"}</p>
               <p>isFull: {detail.isFull ? "true" : "false"}</p>
-              <p>PR1 では waiting 表示のみ対応しています。</p>
             </div>
           </section>
         ) : null}

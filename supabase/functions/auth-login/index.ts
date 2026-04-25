@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { SignJWT } from "npm:jose";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -121,27 +122,24 @@ async function verifyPasswordPbkdf2(plain: string, stored: string) {
   return timingSafeEqual(actual, expected);
 }
 
-async function signJwtHS256(payload: Record<string, unknown>, secret: string) {
-  const header = { alg: "HS256", typ: "JWT" };
-  const headerB64 = base64UrlEncodeJson(header);
-  const payloadB64 = base64UrlEncodeJson(payload);
-  const data = `${headerB64}.${payloadB64}`;
+async function signJwtHS256(payload: {
+  iss: string;
+  sub: string;
+  username: string;
+  iat: number;
+  exp: number;
+}, secret: string) {
+  const key = new TextEncoder().encode(secret);
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(data),
-  );
-  const sigB64 = base64UrlEncode(new Uint8Array(sig));
-  return `${data}.${sigB64}`;
+  return await new SignJWT({
+    username: payload.username,
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuer(payload.iss)
+    .setSubject(payload.sub)
+    .setIssuedAt(payload.iat)
+    .setExpirationTime(payload.exp)
+    .sign(key);
 }
 
 serve(async (req: Request) => {
@@ -234,16 +232,15 @@ serve(async (req: Request) => {
     const exp = now + 60 * 60 * 24 * 7; // 7日（好みで調整OK）
 
     // Typro独自JWT（ゲームサーバ用）
-    const token = await signJwtHS256(
-      {
-        iss: "typro",
-        sub: cred.player_id,
-        username,
-        iat: now,
-        exp,
-      },
-      jwtSecret,
-    );
+    const token = await new SignJWT({
+      username,
+    })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer("typro")
+      .setSubject(cred.player_id)
+      .setIssuedAt(now)
+      .setExpirationTime(exp)
+      .sign(new TextEncoder().encode(jwtSecret));
 
     return json(200, {
       ok: true,
