@@ -45,17 +45,20 @@ export function matchRoomRealtimeReducer(
         ...state,
         channelStatus: action.status,
       };
+
     case "set-error-message":
       return {
         ...state,
         errorMessage: action.message,
       };
+
     case "init-members": {
       return {
         ...state,
         myPlayerId: action.myPlayerId,
         myRole: action.myRole,
-        selfReady: action.myRole === "host" ? !!action.hostReady : !!action.guestReady,
+        selfReady:
+          action.myRole === "host" ? !!action.hostReady : !!action.guestReady,
         host: {
           ...defaultMemberState,
           playerId: action.hostPlayerId,
@@ -69,10 +72,19 @@ export function matchRoomRealtimeReducer(
         errorMessage: "",
       };
     }
+
     case "apply-event": {
       const event = action.event;
       const targetMember = event.role === "host" ? state.host : state.guest;
-      if (!targetMember.playerId || targetMember.playerId !== event.playerId) {
+
+      // 既に別playerIdが入っている場合は、なりすまし/別参加者のイベントとして無視する。
+      if (targetMember.playerId && targetMember.playerId !== event.playerId) {
+        return state;
+      }
+
+      // hostは必ずDB/detail由来で初期化されている前提。
+      // host playerId が無い状態でhostイベントを受け入れると危険なので無視する。
+      if (event.role === "host" && !targetMember.playerId) {
         return state;
       }
 
@@ -80,6 +92,7 @@ export function matchRoomRealtimeReducer(
         if (event.type === "player:ready") {
           return {
             ...member,
+            playerId: event.playerId,
             ready: event.ready,
             hasJoinedRealtime: true,
             connectionStatus: "connected",
@@ -90,6 +103,7 @@ export function matchRoomRealtimeReducer(
         if (event.type === "presence:leave") {
           return {
             ...member,
+            playerId: event.playerId,
             hasJoinedRealtime: true,
             connectionStatus: "disconnected",
             lastHeartbeatAt: event.sentAt,
@@ -98,13 +112,17 @@ export function matchRoomRealtimeReducer(
 
         return {
           ...member,
+          playerId: event.playerId,
           hasJoinedRealtime: true,
           connectionStatus: "connected",
           lastHeartbeatAt: event.sentAt,
         };
       });
 
-      if (event.playerId === state.myPlayerId && event.type === "player:ready") {
+      if (
+        event.playerId === state.myPlayerId &&
+        event.type === "player:ready"
+      ) {
         return {
           ...next,
           selfReady: event.ready,
@@ -113,11 +131,13 @@ export function matchRoomRealtimeReducer(
 
       return next;
     }
+
     case "set-self-ready": {
       if (!state.myRole) return state;
 
       const next = updateMemberByRole(state, state.myRole, (member) => ({
         ...member,
+        playerId: state.myPlayerId || member.playerId,
         ready: action.ready,
       }));
 
@@ -126,8 +146,11 @@ export function matchRoomRealtimeReducer(
         selfReady: action.ready,
       };
     }
+
     case "heartbeat-timeout-check": {
-      const check = (member: MatchRealtimeMemberState): MatchRealtimeMemberState => {
+      const check = (
+        member: MatchRealtimeMemberState,
+      ): MatchRealtimeMemberState => {
         if (!member.hasJoinedRealtime || !member.lastHeartbeatAt) {
           return member;
         }
@@ -148,6 +171,7 @@ export function matchRoomRealtimeReducer(
         guest: check(state.guest),
       };
     }
+
     default:
       return state;
   }

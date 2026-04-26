@@ -17,7 +17,6 @@ export function getRealtimeClient(): SupabaseClient {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
-        detectSessionInUrl: false,
       },
     });
   }

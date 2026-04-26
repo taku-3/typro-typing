@@ -1,14 +1,9 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { MatchRoomDetail } from "@/features/typro/match/types";
-import {
-  cleanupMatchRoomChannel,
-  createMatchRoomChannel,
-  type MatchRoomChannel,
-} from "./channel";
-import {
-  initialMatchRoomRealtimeState,
-  matchRoomRealtimeReducer,
-} from "./reducer";
+import { getRealtimeClient } from "@/lib/supabase/realtime-client";
+import { MATCH_EVENT_NAME, buildMatchRoomChannelName } from "./channel";
+import { initialMatchRoomRealtimeState, matchRoomRealtimeReducer } from "./reducer";
 import type { MatchRealtimeEvent } from "./types";
 
 const HEARTBEAT_INTERVAL_MS = 3000;
@@ -52,9 +47,13 @@ function isParticipantMatchedEvent(
     return event.playerId === identities.hostPlayerId;
   }
 
-  return (
-    !!identities.guestPlayerId && event.playerId === identities.guestPlayerId
-  );
+  if (identities.guestPlayerId) {
+    return event.playerId === identities.guestPlayerId;
+  }
+
+  // host側では、ルーム作成直後の detail に guest がまだ存在しない。
+  // そのため guestPlayerId が null の場合は、初回の guest event を受け入れて reducer 側で guest を登録する。
+  return event.playerId !== identities.hostPlayerId;
 }
 
 export function useMatchRoomRealtime({
@@ -66,18 +65,21 @@ export function useMatchRoomRealtime({
     matchRoomRealtimeReducer,
     initialMatchRoomRealtimeState,
   );
-  const channelRef = useRef<MatchRoomChannel | null>(null);
+
+  const stateRef = useRef(state);
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const participantIdentities = useMemo(() => {
-    if (!detail) {
-      return null;
-    }
+    if (!detail) return null;
 
     const host = detail.room.players.find((player) => player.role === "host");
     const guest = detail.room.players.find((player) => player.role === "guest");
-    if (!host) {
-      return null;
-    }
+
+    if (!host) return null;
 
     return {
       hostPlayerId: host.playerId,
@@ -88,6 +90,7 @@ export function useMatchRoomRealtime({
   useEffect(() => {
     if (!detail || !myPlayerId) return;
     if (detail.viewerRole !== "host" && detail.viewerRole !== "guest") return;
+
     if (!participantIdentities) {
       dispatch({
         type: "set-error-message",
@@ -109,58 +112,51 @@ export function useMatchRoomRealtime({
     if (!detail || !authToken || !myPlayerId || !participantIdentities) return;
     if (detail.viewerRole !== "host" && detail.viewerRole !== "guest") return;
 
+    const client = getRealtimeClient();
     const myRole = detail.viewerRole;
 
     let disposed = false;
     let heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
     let timeoutCheckIntervalId: ReturnType<typeof setInterval> | null = null;
 
-    const broadcastEvent = (event: MatchRealtimeEvent) => {
-      const channel = channelRef.current;
-      if (!channel) return;
+    dispatch({ type: "set-channel-status", status: "subscribing" });
+    dispatch({ type: "set-error-message", message: "" });
 
-      channel.send({
+    const channel = client.channel(
+      buildMatchRoomChannelName(detail.room.roomCode),
+      {
+        config: {
+          broadcast: {
+            self: false,
+          },
+        },
+      },
+    );
+
+    channelRef.current = channel;
+
+    const broadcastEvent = (event: MatchRealtimeEvent) => {
+      void channel.send({
         type: "broadcast",
-        event: "match-event",
+        event: MATCH_EVENT_NAME,
         payload: event,
       });
     };
 
     const sendHeartbeat = () => {
-      const heartbeat: MatchRealtimeEvent = {
+      const heartbeatEvent: MatchRealtimeEvent = {
         type: "heartbeat",
         playerId: myPlayerId,
         role: myRole,
         sentAt: Date.now(),
       };
-      dispatch({ type: "apply-event", event: heartbeat });
-      broadcastEvent(heartbeat);
+
+      dispatch({ type: "apply-event", event: heartbeatEvent });
+      broadcastEvent(heartbeatEvent);
     };
 
-    dispatch({ type: "set-channel-status", status: "subscribing" });
-    dispatch({ type: "set-error-message", message: "" });
-
-    try {
-      channelRef.current = createMatchRoomChannel({
-        roomCode: detail.room.roomCode,
-        authToken,
-      });
-    } catch (error) {
-      dispatch({ type: "set-channel-status", status: "error" });
-      dispatch({
-        type: "set-error-message",
-        message:
-          error instanceof Error
-            ? error.message
-            : "realtime初期化に失敗しました。",
-      });
-      return;
-    }
-
-    channelRef.current.onBroadcast(({ payload }) => {
-      if (!isRealtimeEvent(payload)) {
-        return;
-      }
+    channel.on("broadcast", { event: MATCH_EVENT_NAME }, ({ payload }) => {
+      if (!isRealtimeEvent(payload)) return;
 
       if (!isParticipantMatchedEvent(payload, participantIdentities)) {
         console.warn("Ignored realtime event by participant mismatch", {
@@ -171,9 +167,32 @@ export function useMatchRoomRealtime({
       }
 
       dispatch({ type: "apply-event", event: payload });
+
+      // 後から入ってきた相手に、自分の現在Ready状態を再送する。
+      // broadcastは過去イベントを再生しないため、guestが後入りした場合に必要。
+      if (payload.type === "presence:join" && payload.playerId !== myPlayerId) {
+        const currentState = stateRef.current;
+        const currentRole = currentState.myRole ?? myRole;
+        const currentPlayerId = currentState.myPlayerId || myPlayerId;
+
+        if (!currentRole || !currentPlayerId) return;
+
+        const readySyncEvent: MatchRealtimeEvent = {
+          type: "player:ready",
+          playerId: currentPlayerId,
+          role: currentRole,
+          ready: currentState.selfReady,
+          sentAt: Date.now(),
+        };
+
+        dispatch({ type: "apply-event", event: readySyncEvent });
+        broadcastEvent(readySyncEvent);
+      }
     });
 
-    channelRef.current.subscribe((status) => {
+    channel.subscribe((status) => {
+      console.log("[match realtime subscribe status]", status);
+
       if (disposed) return;
 
       if (status === "SUBSCRIBED") {
@@ -200,6 +219,7 @@ export function useMatchRoomRealtime({
             timeoutMs: HEARTBEAT_TIMEOUT_MS,
           });
         }, 1000);
+
         return;
       }
 
@@ -228,10 +248,10 @@ export function useMatchRoomRealtime({
       if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
       if (timeoutCheckIntervalId) clearInterval(timeoutCheckIntervalId);
 
-      const channel = channelRef.current;
+      const currentChannel = channelRef.current;
       channelRef.current = null;
 
-      if (channel) {
+      if (currentChannel) {
         const leaveEvent: MatchRealtimeEvent = {
           type: "presence:leave",
           playerId: myPlayerId,
@@ -239,13 +259,13 @@ export function useMatchRoomRealtime({
           sentAt: Date.now(),
         };
 
-        channel.send({
+        void currentChannel.send({
           type: "broadcast",
-          event: "match-event",
+          event: MATCH_EVENT_NAME,
           payload: leaveEvent,
         });
 
-        cleanupMatchRoomChannel(channel);
+        void client.removeChannel(currentChannel);
       }
 
       dispatch({ type: "set-channel-status", status: "closed" });
@@ -253,22 +273,30 @@ export function useMatchRoomRealtime({
   }, [authToken, detail, myPlayerId, participantIdentities]);
 
   const toggleReady = () => {
-    if (state.myRole !== "host" && state.myRole !== "guest") return;
+    const role =
+      state.myRole ??
+      (detail?.viewerRole === "host" || detail?.viewerRole === "guest"
+        ? detail.viewerRole
+        : null);
+
+    const playerId = state.myPlayerId || myPlayerId;
+
+    if (!role || !playerId) return;
 
     const nextReady = !state.selfReady;
-    const event: MatchRealtimeEvent = {
+
+    const readyEvent: MatchRealtimeEvent = {
       type: "player:ready",
-      playerId: state.myPlayerId,
-      role: state.myRole,
+      playerId,
+      role,
       ready: nextReady,
       sentAt: Date.now(),
     };
 
     dispatch({ type: "set-self-ready", ready: nextReady });
-    dispatch({ type: "apply-event", event });
+    dispatch({ type: "apply-event", event: readyEvent });
 
-    const channel = channelRef.current;
-    if (!channel) {
+    if (!channelRef.current) {
       dispatch({
         type: "set-error-message",
         message: "Realtime未接続のためReady同期できません。",
@@ -276,10 +304,10 @@ export function useMatchRoomRealtime({
       return;
     }
 
-    channel.send({
+    void channelRef.current.send({
       type: "broadcast",
-      event: "match-event",
-      payload: event,
+      event: MATCH_EVENT_NAME,
+      payload: readyEvent,
     });
   };
 
