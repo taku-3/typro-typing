@@ -21,6 +21,9 @@ export const initialMatchRoomRealtimeState: MatchRoomRealtimeState = {
   host: { ...defaultMemberState },
   guest: { ...defaultMemberState },
   errorMessage: "",
+  startStatus: "idle",
+  startedAt: null,
+  startErrorMessage: null,
 };
 
 function updateMemberByRole(
@@ -52,6 +55,12 @@ export function matchRoomRealtimeReducer(
         errorMessage: action.message,
       };
 
+    case "set-start-error-message":
+      return {
+        ...state,
+        startErrorMessage: action.message,
+      };
+
     case "init-members": {
       return {
         ...state,
@@ -70,11 +79,28 @@ export function matchRoomRealtimeReducer(
           ready: !!action.guestReady,
         },
         errorMessage: "",
+        startStatus: "idle",
+        startedAt: null,
+        startErrorMessage: null,
       };
     }
 
     case "apply-event": {
       const event = action.event;
+      if (event.type === "match:start") {
+        if (event.role !== "host") return state;
+        if (!state.host.playerId || event.playerId !== state.host.playerId) return state;
+        if (!Number.isFinite(event.startedAt)) return state;
+        if (state.startStatus !== "idle") return state;
+
+        return {
+          ...state,
+          startStatus: "starting",
+          startedAt: event.startedAt,
+          startErrorMessage: null,
+        };
+      }
+
       const targetMember = event.role === "host" ? state.host : state.guest;
 
       // 既に別playerIdが入っている場合は、なりすまし/別参加者のイベントとして無視する。
@@ -144,6 +170,15 @@ export function matchRoomRealtimeReducer(
       return {
         ...next,
         selfReady: action.ready,
+      };
+    }
+
+    case "mark-started": {
+      if (state.startStatus !== "starting") return state;
+
+      return {
+        ...state,
+        startStatus: "started",
       };
     }
 

@@ -3,7 +3,10 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { MatchRoomDetail } from "@/features/typro/match/types";
 import { getRealtimeClient } from "@/lib/supabase/realtime-client";
 import { MATCH_EVENT_NAME, buildMatchRoomChannelName } from "./channel";
-import { initialMatchRoomRealtimeState, matchRoomRealtimeReducer } from "./reducer";
+import {
+  initialMatchRoomRealtimeState,
+  matchRoomRealtimeReducer,
+} from "./reducer";
 import type { MatchRealtimeEvent } from "./types";
 
 const HEARTBEAT_INTERVAL_MS = 3000;
@@ -26,6 +29,16 @@ function isRealtimeEvent(payload: unknown): payload is MatchRealtimeEvent {
       (data.role === "host" || data.role === "guest") &&
       typeof data.sentAt === "number" &&
       typeof data.ready === "boolean"
+    );
+  }
+
+  if (data.type === "match:start") {
+    return (
+      typeof data.playerId === "string" &&
+      data.role === "host" &&
+      typeof data.sentAt === "number" &&
+      typeof data.startedAt === "number" &&
+      Number.isFinite(data.startedAt)
     );
   }
 
@@ -164,6 +177,26 @@ export function useMatchRoomRealtime({
           playerId: payload.playerId,
         });
         return;
+      }
+
+      if (payload.type === "match:start") {
+        const currentState = stateRef.current;
+        const hostPlayerId = participantIdentities.hostPlayerId;
+        const isValidStartEvent =
+          payload.role === "host" &&
+          payload.playerId === hostPlayerId &&
+          currentState.startStatus === "idle" &&
+          Number.isFinite(payload.startedAt);
+
+        if (!isValidStartEvent) {
+          console.warn("Ignored invalid match:start event", {
+            role: payload.role,
+            playerId: payload.playerId,
+            startedAt: payload.startedAt,
+            startStatus: currentState.startStatus,
+          });
+          return;
+        }
       }
 
       dispatch({ type: "apply-event", event: payload });
@@ -311,9 +344,95 @@ export function useMatchRoomRealtime({
     });
   };
 
+  const canStart =
+    state.myRole === "host" &&
+    state.host.playerId === myPlayerId &&
+    state.host.ready &&
+    state.guest.ready &&
+    state.host.connectionStatus === "connected" &&
+    state.guest.connectionStatus === "connected" &&
+    state.startStatus === "idle" &&
+    state.channelStatus === "subscribed";
+
+  useEffect(() => {
+    if (state.startStatus !== "starting" || state.startedAt === null) {
+      return;
+    }
+
+    const delayMs = state.startedAt - Date.now();
+    if (delayMs <= 0) {
+      dispatch({ type: "mark-started" });
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      dispatch({ type: "mark-started" });
+    }, delayMs);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [state.startStatus, state.startedAt]);
+
+  const startMatch = () => {
+    if (state.myRole !== "host") {
+      dispatch({
+        type: "set-start-error-message",
+        message: "hostのみ開始できます。",
+      });
+      return;
+    }
+
+    if (!canStart) {
+      dispatch({
+        type: "set-start-error-message",
+        message: "開始条件を満たしていません。",
+      });
+      return;
+    }
+
+    const channel = channelRef.current;
+    if (!channel) {
+      dispatch({
+        type: "set-start-error-message",
+        message: "Realtime未接続のため開始同期できません。",
+      });
+      return;
+    }
+
+    const startedAt = Date.now() + 3000;
+
+    if (!state.host.playerId || state.host.playerId !== myPlayerId) {
+      dispatch({
+        type: "set-start-error-message",
+        message: "host情報を確認できないため開始できません。",
+      });
+      return;
+    }
+
+    const startEvent: MatchRealtimeEvent = {
+      type: "match:start",
+      playerId: state.host.playerId,
+      role: "host",
+      sentAt: Date.now(),
+      startedAt,
+    };
+
+    dispatch({ type: "apply-event", event: startEvent });
+    dispatch({ type: "set-start-error-message", message: null });
+
+    void channel.send({
+      type: "broadcast",
+      event: MATCH_EVENT_NAME,
+      payload: startEvent,
+    });
+  };
+
   return {
     state,
     toggleReady,
+    startMatch,
+    canStart,
     canSubscribe:
       !!detail &&
       (detail.viewerRole === "host" || detail.viewerRole === "guest"),
