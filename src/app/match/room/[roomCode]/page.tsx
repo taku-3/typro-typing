@@ -52,11 +52,27 @@ export default function MatchRoomPage() {
     return storedPlayer?.id ?? "";
   }, [detail, storedPlayer?.id]);
 
-  const { state: realtimeState, toggleReady, canSubscribe } = useMatchRoomRealtime({
+  const { state: realtimeState, toggleReady, startMatch, canStart, canSubscribe } = useMatchRoomRealtime({
     authToken,
     detail,
     myPlayerId,
   });
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (realtimeState.startStatus !== "starting") {
+      return;
+    }
+
+    setNow(Date.now());
+    const intervalId = setInterval(() => {
+      setNow(Date.now());
+    }, 200);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [realtimeState.startStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +124,10 @@ export default function MatchRoomPage() {
   const themeLabel = detail
     ? WORD_THEMES[detail.room.settings.themeId as WordThemeKey]?.label ?? detail.room.settings.themeId
     : "-";
+  const countdownSec =
+    realtimeState.startStatus === "starting" && realtimeState.startedAt
+      ? Math.max(0, Math.ceil((realtimeState.startedAt - now) / 1000))
+      : null;
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 px-6 py-10">
@@ -115,7 +135,7 @@ export default function MatchRoomPage() {
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold">対戦ルーム</h1>
-            <p className="text-sm text-slate-300 mt-1">Phase2-A: Realtime READY / 接続状態同期</p>
+            <p className="text-sm text-slate-300 mt-1">Phase2-B: START同期</p>
           </div>
           <Link
             href="/match"
@@ -187,6 +207,9 @@ export default function MatchRoomPage() {
               {realtimeState.errorMessage ? (
                 <p className="text-rose-300">Realtime: {realtimeState.errorMessage}</p>
               ) : null}
+              {realtimeState.startErrorMessage ? (
+                <p className="text-rose-300">Start: {realtimeState.startErrorMessage}</p>
+              ) : null}
               {!canSubscribe ? (
                 <p className="text-amber-300">outsider のためRealtime購読は行いません。</p>
               ) : (
@@ -208,12 +231,26 @@ export default function MatchRoomPage() {
                 {detail.viewerRole === "host" ? (
                   <button
                     type="button"
-                    disabled
-                    className="rounded-lg px-4 py-2 bg-slate-700 text-slate-300 text-sm cursor-not-allowed"
+                    onClick={startMatch}
+                    disabled={!canStart}
+                    className="rounded-lg px-4 py-2 bg-indigo-600 enabled:hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-300 text-white text-sm disabled:cursor-not-allowed"
                   >
-                    対戦開始（次PRで有効化）
+                    対戦開始
                   </button>
-                ) : null}
+                ) : (
+                  <p className="self-center text-sm text-slate-300">hostの開始待ち</p>
+                )}
+              </div>
+            ) : null}
+
+            {realtimeState.startStatus === "starting" ? (
+              <div className="rounded-xl border border-indigo-500/40 bg-indigo-500/10 p-4 text-sm">
+                <p className="text-indigo-200 font-semibold">対戦開始まで: {countdownSec ?? 0}</p>
+              </div>
+            ) : null}
+            {realtimeState.startStatus === "started" ? (
+              <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm">
+                <p className="text-emerald-200 font-semibold">START! 次PRでPlayScreenへ接続します。</p>
               </div>
             ) : null}
 

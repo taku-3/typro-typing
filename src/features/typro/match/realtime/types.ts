@@ -25,6 +25,13 @@ export type MatchRealtimeEvent =
       playerId: string;
       role: MatchPlayerRole;
       sentAt: number;
+    }
+  | {
+      type: "match:start";
+      playerId: string;
+      role: "host";
+      sentAt: number;
+      startedAt: number;
     };
 
 export type MatchRealtimeConnectionStatus = "connected" | "disconnected" | "unknown";
@@ -52,6 +59,9 @@ export type MatchRoomRealtimeState = {
   host: MatchRealtimeMemberState;
   guest: MatchRealtimeMemberState;
   errorMessage: string;
+  startStatus: "idle" | "starting" | "started";
+  startedAt: number | null;
+  startErrorMessage: string | null;
 };
 
 export type MatchRoomRealtimeAction =
@@ -62,6 +72,10 @@ export type MatchRoomRealtimeAction =
   | {
       type: "set-error-message";
       message: string;
+    }
+  | {
+      type: "set-start-error-message";
+      message: string | null;
     }
   | {
       type: "init-members";
@@ -79,6 +93,9 @@ export type MatchRoomRealtimeAction =
   | {
       type: "set-self-ready";
       ready: boolean;
+    }
+  | {
+      type: "mark-started";
     }
   | {
       type: "heartbeat-timeout-check";
